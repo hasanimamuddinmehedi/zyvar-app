@@ -1,10 +1,13 @@
 // src/pages/Payment.jsx
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import {
   collection,
   addDoc,
+  query,
+  where,
+  getDocs,
 } from "firebase/firestore";
 
 import {
@@ -35,6 +38,10 @@ import {
   warningAlert,
 } from "../utils/alerts";
 
+// ZYVAR'S OWN FIXED PAYMENT NUMBER — used for products
+// uploaded directly by ZYVAR admin (partnerSlug === "zyvar")
+const ZYVAR_PAYMENT_NUMBER = "01820400999";
+
 export default function Payment() {
 
   const [orderPlaced, setOrderPlaced] = useState(false);
@@ -50,9 +57,41 @@ const nagadLogo =
     useNavigate();
 
   const {
-    cart = [],
+    cart: fullCart = [],
+    removeOrderedItems,
     clearCart,
+    selectedItems,
   } = useCart();
+
+  // FILTER CART TO SELECTED ITEMS ONLY — Cart.jsx now only
+  // lets the customer check out ONE partner group at a time,
+  // and sets selectedItems to that group's item IDs before
+  // navigating here. Payment only processes those items; the
+  // rest of the cart (other sellers' items) is left alone.
+  // Falls back to the full cart if nothing is selected (e.g.
+  // an old link straight to /payment, or a single-partner
+  // cart where selection is implicit).
+  //
+  // MEMOIZED — without this, `cart` was a brand-new array on
+  // every single render (a fresh .filter() call each time).
+  // The seller-groups effect below depends on `cart`, so React
+  // saw a "changed" dependency on every render and re-ran it in
+  // a loop, continuously flipping sellerGroupsLoading back to
+  // true. That's why bKash/Nagad payment details never finished
+  // loading. Memoizing keeps the same array reference unless
+  // fullCart or selectedItems actually change.
+  const cart =
+    useMemo(() => {
+
+      return selectedItems && selectedItems.length > 0
+
+        ? fullCart.filter(
+            (item) => selectedItems.includes(item.id)
+          )
+
+        : fullCart;
+
+    }, [fullCart, selectedItems]);
 
   const [name, setName] =
     useState("");
@@ -83,15 +122,32 @@ const nagadLogo =
     setPaymentMethod] =
     useState("COD");
 
-  const [transactionId,
-    setTransactionId] =
-    useState("");
+  // TRANSACTION IDs — one per seller, since bKash/Nagad
+  // payments may need to be split across multiple partners
+  // if the cart contains products from more than one seller.
+  // (In the current one-store-at-a-time checkout flow this
+  // will normally only ever hold a single entry, but the
+  // grouping logic is kept generic in case that ever changes.)
+  // Keyed by partnerSlug, e.g. { zyvar: "TXN123", "shop-abc": "TXN456" }
+  const [transactionIds,
+    setTransactionIds] =
+    useState({});
 
   const [loading, setLoading] =
     useState(false);
 
   const [profileLoading,
     setProfileLoading] =
+    useState(true);
+
+  // SELLER PAYMENT BREAKDOWN — grouped by partnerSlug, with
+  // each seller's subtotal and the number to send payment to
+  const [sellerGroups,
+    setSellerGroups] =
+    useState([]);
+
+  const [sellerGroupsLoading,
+    setSellerGroupsLoading] =
     useState(true);
 
   // AUTO FILTER
@@ -201,7 +257,7 @@ const nagadLogo =
 
   }, []);
 
-  // EMPTY CART
+  // EMPTY CART (based on selected/filtered cart)
   useEffect(() => {
 
   if (
@@ -214,7 +270,7 @@ const nagadLogo =
 
 }, [cart, orderPlaced, navigate]);
 
-  // TOTAL
+  // TOTAL (based on selected/filtered cart)
   const total = cart.reduce(
 
     (acc, item) =>
@@ -225,6 +281,169 @@ const nagadLogo =
 
     0
   );
+
+  // BUILD SELLER PAYMENT BREAKDOWN — groups cart items by
+  // partnerSlug, calculates each seller's subtotal, and
+  // resolves each seller's bKash/Nagad payment number
+  // (ZYVAR's products use the fixed ZYVAR number; partner
+  // products look up the number they gave during application)
+  useEffect(() => {
+
+    const buildSellerGroups =
+      async () => {
+
+        if (!cart || cart.length === 0) {
+
+          setSellerGroups([]);
+
+          setSellerGroupsLoading(false);
+
+          return;
+        }
+
+        try {
+
+          setSellerGroupsLoading(true);
+
+          // GROUP CART ITEMS BY partnerSlug
+          // (items missing partnerSlug are treated as ZYVAR's own,
+          // same fallback used everywhere else in the app)
+          const groupsMap = {};
+
+          cart.forEach((item) => {
+
+            const slug =
+              item.partnerSlug || "zyvar";
+
+            if (!groupsMap[slug]) {
+
+              groupsMap[slug] = {
+                partnerSlug: slug,
+                items: [],
+                subtotal: 0,
+              };
+            }
+
+            groupsMap[slug].items.push(item);
+
+            groupsMap[slug].subtotal +=
+              Number(item.price) *
+              Number(item.quantity);
+          });
+
+          const slugs =
+            Object.keys(groupsMap);
+
+          // RESOLVE EACH SELLER'S NAME + PAYMENT NUMBER
+          const resolvedGroups =
+            await Promise.all(
+
+              slugs.map(
+                async (slug) => {
+
+                  const group =
+                    groupsMap[slug];
+
+                  // ZYVAR — fixed identity, fixed number
+                  if (slug === "zyvar") {
+
+                    return {
+                      ...group,
+                      shopName: "ZYVAR",
+                      paymentNumber:
+                        ZYVAR_PAYMENT_NUMBER,
+                    };
+                  }
+
+                  // PARTNER — look up their approved
+                  // partner doc for shopName + paymentNumber
+                  try {
+
+                    const partnerQuery =
+                      query(
+                        collection(
+                          db,
+                          "partners"
+                        ),
+                        where(
+                          "slug",
+                          "==",
+                          slug
+                        )
+                      );
+
+                    const partnerSnap =
+                      await getDocs(
+                        partnerQuery
+                      );
+
+                    if (!partnerSnap.empty) {
+
+                      const partnerData =
+                        partnerSnap.docs[0].data();
+
+                      return {
+                        ...group,
+                        shopName:
+                          partnerData.shopName ||
+                          "Partner Store",
+                        paymentNumber:
+                          partnerData.paymentNumber ||
+                          "",
+                      };
+                    }
+
+                    // PARTNER DOC NOT FOUND — fall back
+                    // gracefully instead of breaking checkout
+                    return {
+                      ...group,
+                      shopName: "Partner Store",
+                      paymentNumber: "",
+                    };
+
+                  } catch (err) {
+
+                    console.log(err);
+
+                    return {
+                      ...group,
+                      shopName: "Partner Store",
+                      paymentNumber: "",
+                    };
+                  }
+                }
+              )
+            );
+
+          setSellerGroups(resolvedGroups);
+
+        } catch (error) {
+
+          console.log(error);
+
+          setSellerGroups([]);
+
+        } finally {
+
+          setSellerGroupsLoading(false);
+        }
+      };
+
+    buildSellerGroups();
+
+  }, [cart]);
+
+  // UPDATE A SPECIFIC SELLER'S TRANSACTION ID
+  const handleTransactionIdChange =
+    (slug, value) => {
+
+      setTransactionIds(
+        (prev) => ({
+          ...prev,
+          [slug]: value,
+        })
+      );
+    };
 
   // FULL ADDRESS
   const fullAddress = `
@@ -246,27 +465,31 @@ ${address}
 
         setLoading(true);
 
-        // VALIDATE TRANSACTION
+        // VALIDATE TRANSACTION — one transaction ID required
+        // per seller when paying via bKash or Nagad, since
+        // payment may be split across multiple sellers
         if (
-
-          (paymentMethod === "bKash" ||
-
-          paymentMethod === "Nagad")
-
-          &&
-
-          !transactionId
-
+          paymentMethod === "bKash" ||
+          paymentMethod === "Nagad"
         ) {
 
-          await warningAlert(
-            "Transaction ID Required",
-            "Please enter your transaction ID to continue."
-          );
+          const missingSeller =
+            sellerGroups.find(
+              (group) =>
+                !transactionIds[group.partnerSlug]
+            );
 
-          setLoading(false);
+          if (missingSeller) {
 
-          return;
+            await warningAlert(
+              "Transaction ID Required",
+              `Please enter the transaction ID for your payment to ${missingSeller.shopName}.`
+            );
+
+            setLoading(false);
+
+            return;
+          }
         }
 
         // SAVE PROFILE
@@ -322,13 +545,43 @@ ${address}
 
             paymentMethod,
 
+            // SELLER PAYMENT BREAKDOWN — records exactly which
+            // seller received which amount, sent to which number,
+            // confirmed by which transaction ID
+            sellerPayments:
+
+              paymentMethod === "COD"
+
+                ? []
+
+                : sellerGroups.map(
+                    (group) => ({
+                      partnerSlug:
+                        group.partnerSlug,
+                      shopName:
+                        group.shopName,
+                      paymentNumber:
+                        group.paymentNumber,
+                      subtotal:
+                        group.subtotal,
+                      transactionId:
+                        transactionIds[
+                          group.partnerSlug
+                        ] || "",
+                    })
+                  ),
+
+            // KEPT FOR BACKWARD COMPATIBILITY — older order
+            // views may still read a single transactionId field
             transactionId:
 
               paymentMethod === "COD"
 
                 ? ""
 
-                : transactionId,
+                : Object.values(
+                    transactionIds
+                  ).join(", "),
 
             items: cart,
 
@@ -351,7 +604,22 @@ ${address}
 
         setOrderPlaced(true);
 
-        clearCart();
+        // REMOVE ONLY THE CHECKED-OUT ITEMS — Cart.jsx now
+        // supports checking out one partner group at a time
+        // while other sellers' items stay behind, so placing
+        // this order must NOT wipe the entire cart. Fall back
+        // to clearCart() only in the unlikely case the removal
+        // helper isn't available (e.g. older CartContext).
+        if (typeof removeOrderedItems === "function") {
+
+          removeOrderedItems(
+            cart.map((item) => item.id)
+          );
+
+        } else {
+
+          clearCart();
+        }
 
         navigate("/my-orders", {
           replace: true,
@@ -399,23 +667,15 @@ ${address}
 
             <p className="uppercase tracking-[0.3em] text-[#C6922B] text-sm mb-3">
 
-              Bangladesh Checkout
+              Checkout
 
             </p>
 
             <h1 className="text-4xl md:text-5xl font-black leading-tight mb-4">
 
-              Delivery & Payment
+              Payment
 
             </h1>
-
-            <p className="text-gray-400 leading-relaxed max-w-2xl">
-
-              Daraz-style smart checkout optimized for Bangladesh delivery.
-              Auto-filter division, district and upazila system.
-              No API, no billing integration needed.
-
-            </p>
 
           </div>
 
@@ -839,9 +1099,16 @@ ${address}
 
                   <p className="text-gray-400 text-sm">
 
-                    Send Money:
-                    {" "}
-                    01820400999
+                    {
+                      sellerGroups.length > 1
+
+                        ? "Send money to each seller below."
+
+                        : `Send Money: ${
+                            sellerGroups[0]?.paymentNumber ||
+                            ZYVAR_PAYMENT_NUMBER
+                          }`
+                    }
 
                   </p>
 
@@ -888,9 +1155,16 @@ ${address}
 
                   <p className="text-gray-400 text-sm">
 
-                    Send Money:
-                    {" "}
-                    01820400999
+                    {
+                      sellerGroups.length > 1
+
+                        ? "Send money to each seller below."
+
+                        : `Send Money: ${
+                            sellerGroups[0]?.paymentNumber ||
+                            ZYVAR_PAYMENT_NUMBER
+                          }`
+                    }
 
                   </p>
 
@@ -900,38 +1174,147 @@ ${address}
 
             </div>
 
-            {/* TRANSACTION */}
+            {/* SELLER PAYMENT BREAKDOWN + TRANSACTION IDS */}
             {
               (paymentMethod === "bKash" ||
 
               paymentMethod === "Nagad") && (
 
-                <div>
+                <div className="rounded-3xl border border-white/10 bg-white/[0.03] p-6 space-y-6">
 
-                  <label className="block mb-3 text-sm uppercase tracking-widest text-gray-400">
+                  <h2 className="text-2xl font-black">
 
-                    Transaction ID
+                    Send Payment To
 
-                  </label>
+                  </h2>
 
-                  <input
+                  {
+                    sellerGroupsLoading ? (
 
-                    type="text"
+                      <div className="flex items-center gap-3 text-gray-400">
 
-                    required
+                        <div className="w-5 h-5 border-2 border-[#C6922B] border-t-transparent rounded-full animate-spin" />
 
-                    value={transactionId}
+                        Loading payment details...
 
-                    onChange={(e) =>
-                      setTransactionId(
-                        e.target.value
+                      </div>
+
+                    ) : (
+
+                      sellerGroups.map(
+                        (group) => (
+
+                          <div
+
+                            key={group.partnerSlug}
+
+                            className="rounded-2xl border border-white/10 bg-black/30 p-5 space-y-4"
+                          >
+
+                            <div className="flex flex-wrap items-center justify-between gap-3">
+
+                              <div>
+
+                                <p className="text-gray-400 text-xs uppercase tracking-widest mb-1">
+
+                                  Seller
+
+                                </p>
+
+                                <h3 className="text-xl font-black text-[#C6922B]">
+
+                                  {group.shopName}
+
+                                </h3>
+
+                              </div>
+
+                              <div className="text-right">
+
+                                <p className="text-gray-400 text-xs uppercase tracking-widest mb-1">
+
+                                  Amount To Send
+
+                                </p>
+
+                                <h3 className="text-xl font-black">
+
+                                  ৳{group.subtotal}
+
+                                </h3>
+
+                              </div>
+
+                            </div>
+
+                            <div className="rounded-xl bg-white/5 border border-white/10 p-4">
+
+                              {
+                                group.paymentNumber ? (
+
+                                  <p className="text-gray-200">
+
+                                    {paymentMethod} Number:
+                                    {" "}
+                                    <span className="font-black text-[#C6922B]">
+
+                                      {group.paymentNumber}
+
+                                    </span>
+
+                                  </p>
+
+                                ) : (
+
+                                  <p className="text-red-400 text-sm">
+
+                                    This seller has not added a payment number yet. Please contact support before paying.
+
+                                  </p>
+                                )
+                              }
+
+                            </div>
+
+                            <div>
+
+                              <label className="block mb-3 text-sm uppercase tracking-widest text-gray-400">
+
+                                Transaction ID For {group.shopName}
+
+                              </label>
+
+                              <input
+
+                                type="text"
+
+                                required
+
+                                value={
+                                  transactionIds[
+                                    group.partnerSlug
+                                  ] || ""
+                                }
+
+                                onChange={(e) =>
+                                  handleTransactionIdChange(
+                                    group.partnerSlug,
+                                    e.target.value
+                                  )
+                                }
+
+                                placeholder="Enter transaction ID"
+
+                                className="w-full px-6 py-5 rounded-2xl bg-black/40 border border-white/10 outline-none focus:border-[#C6922B]"
+                              />
+
+                            </div>
+
+                          </div>
+                        )
                       )
-                    }
-
-                    placeholder="Enter transaction ID"
-
-                    className="w-full px-6 py-5 rounded-2xl bg-black/40 border border-white/10 outline-none focus:border-[#C6922B]"
-                  />
+                    )
+                  }
 
                 </div>
               )
@@ -984,16 +1367,19 @@ ${address}
 
                   <img
 
-                    src={item.image}
+                    src={
+                      item.images?.[0] ||
+                      item.image
+                    }
 
                     alt={item.name}
 
                     className="w-20 h-20 rounded-2xl object-cover border border-white/10"
                   />
 
-                  <div className="flex-1">
+                  <div className="flex-1 min-w-0">
 
-                    <h3 className="font-bold">
+                    <h3 className="font-bold break-words leading-snug">
                       {item.name}
                     </h3>
 
@@ -1007,7 +1393,7 @@ ${address}
 
                   </div>
 
-                  <h4 className="font-black text-[#C6922B]">
+                  <h4 className="font-black text-[#C6922B] shrink-0">
 
                     ৳
                     {

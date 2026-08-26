@@ -43,6 +43,10 @@ export default function AdminSidebar() {
       );
     };
 
+  const goHome = () => {
+    navigate("/");
+  };
+
   const navClass =
     ({ isActive }) =>
 
@@ -89,10 +93,15 @@ export default function AdminSidebar() {
       {/* TOP */}
       <div>
 
-        {/* LOGO */}
+        {/* LOGO (links to home) */}
         <div className="mb-14">
 
-          <div className="flex items-center gap-4 mb-5">
+          <div
+            onClick={goHome}
+            role="button"
+            tabIndex={0}
+            className="flex items-center gap-4 mb-5 cursor-pointer"
+          >
 
             {/* Original logo image */}
             <img
@@ -191,6 +200,7 @@ export default function AdminSidebar() {
             <FaUsers className="text-lg" />
             Users
           </NavLink>
+          
 
           {/* 9. Settings */}
           <NavLink
@@ -205,21 +215,13 @@ export default function AdminSidebar() {
 
       </div>
 
-      {/* BOTTOM CARD */}
+      {/* BOTTOM CARD: LOGOUT */}
       <div className="rounded-[35px] border border-white/10 bg-gradient-to-br from-[#1A1A1A] to-[#101010] p-6 mt-10 relative overflow-hidden">
 
         {/* GLOW */}
         <div className="absolute top-0 right-0 w-40 h-40 rounded-full bg-[#C6922B]/10 blur-[80px]" />
 
         <div className="relative z-10">
-
-          <h3 className="text-2xl font-black text-[#C6922B] mb-4">
-            ZYVAR Premium
-          </h3>
-
-          <p className="text-gray-400 leading-relaxed mb-6">
-            Manage your complete ecommerce business from one powerful dashboard.
-          </p>
 
           <button
             onClick={handleLogout}

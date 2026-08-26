@@ -6,25 +6,19 @@ import {
 
 import {
   useEffect,
+  Suspense,
+  lazy,
 } from "react";
 
+// HOME IS LOADED EAGERLY (NOT LAZY) — it's the most common first-visit landing
+// page (including from social media / search links), so we don't want it to wait
+// behind a lazy-load chunk fetch. Every other page is lazy-loaded below: this means
+// a first-time visitor landing on "/" only downloads the JS needed for Home, the
+// Navbar, and shared chrome — NOT the code for Checkout, the entire Admin panel,
+// the entire Partner panel, etc. Those chunks are only fetched when the user
+// actually navigates to a route that needs them, which is what makes the initial
+// load dramatically smaller and faster.
 import Home from "./pages/Home";
-import Products from "./pages/Products";
-import ProductDetails from "./pages/ProductDetails";
-import Login from "./pages/Login";
-import Cart from "./pages/Cart";
-import Wishlist from "./pages/Wishlist";
-import Checkout from "./pages/Checkout";
-import Orders from "./pages/Orders";
-import Payment from "./pages/Payment";
-import Signup from "./pages/Signup";
-import About from "./pages/About";
-import Contact from "./pages/Contact";
-import Profile from "./pages/Profile";
-import ProfileSettings from "./pages/ProfileSettings";
-import OrderSuccess from "./pages/OrderSuccess";
-import OrderTracking from "./pages/OrderTracking";
-import MyOrders from "./pages/MyOrders";
 
 import Navbar from "./components/Navbar";
 
@@ -35,40 +29,163 @@ import {
   trackPage,
 } from "./utils/analytics";
 
+/* ====================================================
+   LAZY-LOADED PAGES
+   Each of these becomes its own small JS chunk that Vercel/Vite serves on demand,
+   instead of all being bundled into one giant file loaded on every visit.
+==================================================== */
+
+const Products =
+  lazy(() => import("./pages/Products"));
+
+const ProductDetails =
+  lazy(() => import("./pages/ProductDetails"));
+
+const Login =
+  lazy(() => import("./pages/Login"));
+
+const Cart =
+  lazy(() => import("./pages/Cart"));
+
+const Wishlist =
+  lazy(() => import("./pages/Wishlist"));
+
+const Checkout =
+  lazy(() => import("./pages/Checkout"));
+
+const Orders =
+  lazy(() => import("./pages/Orders"));
+
+const Payment =
+  lazy(() => import("./pages/Payment"));
+
+const Signup =
+  lazy(() => import("./pages/Signup"));
+
+const About =
+  lazy(() => import("./pages/About"));
+
+const Contact =
+  lazy(() => import("./pages/Contact"));
+
+const Profile =
+  lazy(() => import("./pages/Profile"));
+
+const ProfileSettings =
+  lazy(() => import("./pages/ProfileSettings"));
+
+const Partnersettings =
+  lazy(() => import("./pages/Partnersettings"));
+
+const OrderSuccess =
+  lazy(() => import("./pages/OrderSuccess"));
+
+const OrderTracking =
+  lazy(() => import("./pages/OrderTracking"));
+
+const MyOrders =
+  lazy(() => import("./pages/MyOrders"));
+
 /* ADMIN LAYOUT */
-import AdminLayout from "./pages/admin/AdminLayout";
+const AdminLayout =
+  lazy(() => import("./pages/admin/AdminLayout"));
 
 /* ADMIN PAGES */
-import DashboardPage from "./pages/admin/DashboardPage";
-import OrdersPage from "./pages/admin/OrdersPage";
-import ProductsPage from "./pages/admin/ProductsPage";
-import UploadPage from "./pages/admin/UploadPage";
-import SettingsPage from "./pages/admin/SettingsPage";
-import ProductRequestsPage from "./pages/admin/ProductRequestsPage";
-import PartnerApplicationsPage from "./pages/admin/PartnerApplicationsPage";
-import PartnerCouponsPage from "./pages/admin/PartnerCouponsPage";
-import UsersPage from "./pages/admin/UsersPage";
+const DashboardPage =
+  lazy(() => import("./pages/admin/DashboardPage"));
 
-import BecomePartnerPage from "./pages/BecomePartnerPage";
-import PartnerStorePage from "./pages/PartnerStorePage";
+const OrdersPage =
+  lazy(() => import("./pages/admin/OrdersPage"));
+
+const ProductsPage =
+  lazy(() => import("./pages/admin/ProductsPage"));
+
+const UploadPage =
+  lazy(() => import("./pages/admin/UploadPage"));
+
+const SettingsPage =
+  lazy(() => import("./pages/admin/SettingsPage"));
+
+const ProductRequestsPage =
+  lazy(() => import("./pages/admin/ProductRequestsPage"));
+
+const PartnerApplicationsPage =
+  lazy(() => import("./pages/admin/PartnerApplicationsPage"));
+
+const PartnerCouponsPage =
+  lazy(() => import("./pages/admin/PartnerCouponsPage"));
+
+const UsersPage =
+  lazy(() => import("./pages/admin/UsersPage"));
+
+const BecomePartnerPage =
+  lazy(() => import("./pages/BecomePartnerPage"));
+
+const PartnerStorePage =
+  lazy(() => import("./pages/PartnerStorePage"));
+
+const PartnerLayout =
+  lazy(() => import("./pages/partner/PartnerLayout"));
+
+const PartnerUploadProduct =
+  lazy(() => import("./pages/partner/PartnerUploadProduct"));
+
+const PartnerDashboardPage =
+  lazy(() => import("./pages/partner/DashboardPage"));
+
+const PartnerProductsPage =
+  lazy(() => import("./pages/partner/ProductsPage"));
+
+const PartnerOrdersPage =
+  lazy(() => import("./pages/partner/OrdersPage"));
+
+const PartnerReviewsPage =
+  lazy(() => import("./pages/partner/ReviewsPage"));
+
+const PartnerEarningsPage =
+  lazy(() => import("./pages/partner/EarningsPage"));
+
+const PartnerSettingsPage =
+  lazy(() => import("./pages/partner/SettingsPage"));
 
 import PartnerRoute from "./components/PartnerRoute";
+import StoresPage from "./pages/StoresPage";
 
-import PartnerLayout from "./pages/partner/PartnerLayout";
+// SIMPLE FALLBACK SHOWN WHILE A LAZY CHUNK IS BEING FETCHED.
+// Kept minimal and on-brand so route transitions don't flash an unstyled blank page.
+function PageLoader() {
 
-import PartnerUploadProduct from "./pages/partner/PartnerUploadProduct";
+  return (
+    <div
+      style={{
+        minHeight: "60vh",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        background: "#0B0B0B",
+      }}
+    >
+      <div
+        style={{
+          width: "44px",
+          height: "44px",
+          borderRadius: "50%",
+          border: "3px solid rgba(198,146,43,0.25)",
+          borderTopColor: "#C6922B",
+          animation: "zyvar-spin 0.8s linear infinite",
+        }}
+      />
 
-import PartnerDashboardPage from "./pages/partner/DashboardPage";
-
-import PartnerProductsPage from "./pages/partner/ProductsPage";
-
-import PartnerOrdersPage from "./pages/partner/OrdersPage";
-
-import PartnerReviewsPage from "./pages/partner/ReviewsPage";
-
-import PartnerEarningsPage from "./pages/partner/EarningsPage";
-
-import PartnerSettingsPage from "./pages/partner/SettingsPage";
+      <style>
+        {`
+          @keyframes zyvar-spin {
+            to { transform: rotate(360deg); }
+          }
+        `}
+      </style>
+    </div>
+  );
+}
 
 function AppContent() {
 
@@ -111,7 +228,10 @@ function AppContent() {
         )
       }
 
-      {/* ROUTES */}
+      {/* ROUTES — wrapped in Suspense so lazy-loaded pages show PageLoader
+          while their chunk is being fetched, instead of a blank screen */}
+      <Suspense fallback={<PageLoader />}>
+
       <Routes>
 
         {/* HOME */}
@@ -210,6 +330,15 @@ function AppContent() {
           element={
             <ProtectedRoute>
               <ProfileSettings />
+            </ProtectedRoute>
+          }
+        />
+
+        <Route
+          path="/partner-settings"
+          element={
+            <ProtectedRoute>
+              <Partnersettings />
             </ProtectedRoute>
           }
         />
@@ -424,7 +553,14 @@ function AppContent() {
 
 </Route>
 
+<Route
+  path="/stores"
+  element={<StoresPage />}
+/>
+
       </Routes>
+
+      </Suspense>
     </>
   );
 }

@@ -27,6 +27,7 @@ import {
   Phone,
   Info,
   Search,
+  Store,
 } from "lucide-react";
 
 // FIREBASE
@@ -135,6 +136,11 @@ export default function Navbar() {
     {
       name: "Products",
       path: "/products",
+    },
+
+    {
+      name: "Stores",
+      path: "/stores",
     },
 
     {
@@ -312,6 +318,17 @@ export default function Navbar() {
                 <ShoppingBag size={18} />
 
                 Products
+
+              </Link>
+
+              <Link
+                to="/stores"
+                className="flex items-center gap-2 hover:text-[#C6922B] transition"
+              >
+
+                <Store size={18} />
+
+                Stores
 
               </Link>
 
@@ -859,6 +876,20 @@ export default function Navbar() {
               <ShoppingBag size={20} />
 
               Products
+
+            </Link>
+
+            <Link
+              to="/stores"
+              onClick={() =>
+                setMenuOpen(false)
+              }
+              className="flex items-center gap-4 px-5 py-4 rounded-2xl border border-white/10 bg-white/5 hover:border-[#C6922B] hover:text-[#C6922B] transition"
+            >
+
+              <Store size={20} />
+
+              Stores
 
             </Link>
 

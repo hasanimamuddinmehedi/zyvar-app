@@ -8,9 +8,14 @@ import {
   collection,
   deleteDoc,
   doc,
+  getDoc,
   getDocs,
   updateDoc,
 } from "firebase/firestore";
+
+import {
+  onAuthStateChanged,
+} from "firebase/auth";
 
 import {
   useNavigate,
@@ -26,6 +31,7 @@ import {
 
 import {
   db,
+  auth,
 } from "../../firebase/firebase";
 
 import {
@@ -33,6 +39,10 @@ import {
   errorAlert,
   confirmAlert,
 } from "../../utils/alerts";
+
+import {
+  ADMIN_EMAILS,
+} from "../../utils/adminCheck";
 
 // SLUG UTILITY — same as Products.jsx
 const toSlug = (name = "") =>
@@ -47,6 +57,106 @@ export default function OrdersPage() {
   const navigate =
     useNavigate();
 
+  // ─────────────────────────────────────────────────────
+  // VIEWER IDENTITY — resolves who is looking at this page.
+  // Admin: email is in ADMIN_EMAILS → sees everything.
+  // Partner: has an approved doc in "partnerApplications/{uid}"
+  //          → sees only orders/items where item.partnerSlug
+  //          matches their own slug.
+  // ─────────────────────────────────────────────────────
+  const [viewerInfo,
+    setViewerInfo] =
+    useState(null);
+
+  const [resolvingViewer,
+    setResolvingViewer] =
+    useState(true);
+
+  useEffect(() => {
+
+    const unsubscribe =
+      onAuthStateChanged(
+        auth,
+        async (currentUser) => {
+
+          if (!currentUser) {
+
+            setViewerInfo(null);
+
+            setResolvingViewer(false);
+
+            return;
+          }
+
+          try {
+
+            if (
+              ADMIN_EMAILS.includes(
+                currentUser.email
+              )
+            ) {
+
+              setViewerInfo({
+                uid: currentUser.uid,
+                isAdmin: true,
+                partnerSlug: "zyvar",
+              });
+
+              setResolvingViewer(false);
+
+              return;
+            }
+
+            const partnerRef =
+              doc(
+                db,
+                "partnerApplications",
+                currentUser.uid
+              );
+
+            const partnerSnap =
+              await getDoc(partnerRef);
+
+            if (
+              partnerSnap.exists() &&
+              partnerSnap.data().status === "approved"
+            ) {
+
+              setViewerInfo({
+                uid: currentUser.uid,
+                isAdmin: false,
+                partnerSlug:
+                  partnerSnap.data().slug || "",
+              });
+
+            } else {
+
+              setViewerInfo(null);
+            }
+
+          } catch (error) {
+
+            console.log(error);
+
+            setViewerInfo(null);
+
+          } finally {
+
+            setResolvingViewer(false);
+          }
+        }
+      );
+
+    return () => unsubscribe();
+
+  }, []);
+
+  const isAdmin =
+    !!viewerInfo?.isAdmin;
+
+  const partnerSlug =
+    viewerInfo?.partnerSlug;
+
   const [orders,
     setOrders] =
     useState([]);
@@ -59,8 +169,19 @@ export default function OrdersPage() {
     setOrderSearch] =
     useState("");
 
-  // FETCH ORDERS
+  // FETCH ORDERS — waits for viewer resolution first
   useEffect(() => {
+
+    if (resolvingViewer) return;
+
+    if (!viewerInfo) {
+
+      setOrders([]);
+
+      setLoading(false);
+
+      return;
+    }
 
     const fetchOrders =
       async () => {
@@ -79,11 +200,11 @@ export default function OrdersPage() {
 
           const data =
             snapshot.docs.map(
-              (doc) => ({
+              (docItem) => ({
 
-                id: doc.id,
+                id: docItem.id,
 
-                ...doc.data(),
+                ...docItem.data(),
               })
             );
 
@@ -101,7 +222,7 @@ export default function OrdersPage() {
 
     fetchOrders();
 
-  }, []);
+  }, [viewerInfo, resolvingViewer]);
 
   // HELPER — DETERMINE AUTO PAYMENT STATUS
   const resolvePaymentStatus =
@@ -137,7 +258,27 @@ export default function OrdersPage() {
       return order.paymentStatus || "Pending";
     };
 
+  // HELPER — GET ONLY THE ITEMS BELONGING TO THE CURRENT PARTNER
+  // Admin sees everything; partner only sees their own products within an order.
+  const getVisibleItems =
+    (order) => {
+
+      if (!Array.isArray(order.items))
+        return [];
+
+      if (isAdmin)
+        return order.items;
+
+      return order.items.filter(
+        (item) =>
+          (item.partnerSlug || "zyvar") === partnerSlug
+      );
+    };
+
   // UPDATE ORDER STATUS
+  // NOTE: not gated by role — both admin and partner call this via the
+  // STATUS BUTTONS below, so Confirmed/Delivered emails already fire
+  // "like admin" for whichever role triggers the status change.
   const updateOrderStatus =
     async (
       id,
@@ -228,6 +369,9 @@ export default function OrdersPage() {
         );
 
         // SEND EMAIL NOTIFICATION TO CUSTOMER
+        // NOTE: "Shipping" email is intentionally NOT sent here.
+        // It is sent from the Shipping Charge "Save" handler below,
+        // once the shipping price has actually been set.
         if (order?.email) {
 
           // DETERMINE EMAIL API
@@ -237,11 +381,6 @@ export default function OrdersPage() {
 
             emailEndpoint =
               "https://zyvar-email-server.onrender.com/send-order-confirmed-email";
-
-          } else if (status === "Shipping") {
-
-            emailEndpoint =
-              "https://zyvar-email-server.onrender.com/send-shipping-email";
 
           } else if (status === "Delivered") {
 
@@ -291,6 +430,105 @@ export default function OrdersPage() {
         await errorAlert(
           "Update Failed",
           "Failed to update order status. Please try again."
+        );
+      }
+    };
+
+  // SAVE SHIPPING CHARGE — ALSO SENDS THE "SHIPPING" EMAIL
+  // NOTE: not gated by role — now callable by both admin and partner
+  // (the "Shipping Charge" box below is no longer admin-only), so the
+  // shipping email fires the same way for either role.
+  const saveShippingCharge =
+    async (order, shippingCharge, currentSubtotal) => {
+
+      try {
+
+        const grandTotal =
+          currentSubtotal +
+          shippingCharge;
+
+        await updateDoc(
+          doc(
+            db,
+            "orders",
+            order.id
+          ),
+          {
+
+            shipping:
+              shippingCharge,
+
+            total:
+              grandTotal,
+          }
+        );
+
+        setOrders(
+          orders.map(
+            (item) =>
+
+              item.id ===
+              order.id
+
+                ? {
+                    ...item,
+                    shipping:
+                      shippingCharge,
+
+                    total:
+                      grandTotal,
+                  }
+
+                : item
+          )
+        );
+
+        await successAlert(
+          "Shipping Updated!",
+          "Shipping charge has been saved successfully."
+        );
+
+        // SEND SHIPPING EMAIL — ONLY NOW, AFTER THE PRICE IS SAVED
+        if (order?.email) {
+
+          await fetch(
+            "https://zyvar-email-server.onrender.com/send-shipping-email",
+            {
+
+              method: "POST",
+
+              headers: {
+                "Content-Type": "application/json",
+              },
+
+              body: JSON.stringify({
+
+                order: {
+
+                  ...order,
+
+                  id: order.id,
+
+                  status: "Shipping",
+
+                  subtotal: currentSubtotal,
+
+                  shipping: shippingCharge,
+
+                  total: grandTotal,
+                },
+              }),
+            }
+          );
+        }
+
+      } catch (error) {
+
+        console.log(error);
+
+        await errorAlert(
+          "Update Failed",
+          "Failed to save shipping charge. Please try again."
         );
       }
     };
@@ -347,7 +585,7 @@ export default function OrdersPage() {
       }
     };
 
-  // DELETE ORDER
+  // DELETE ORDER — ADMIN ONLY (button is gated in render below)
   const deleteOrderHandler =
     async (orderId) => {
 
@@ -396,6 +634,20 @@ export default function OrdersPage() {
 
         .filter((order) => {
 
+          // PARTNER SCOPE — only orders containing at least one of their own items
+          if (!isAdmin) {
+
+            const hasOwnItem =
+              Array.isArray(order.items) &&
+              order.items.some(
+                (item) =>
+                  (item.partnerSlug || "zyvar") === partnerSlug
+              );
+
+            if (!hasOwnItem)
+              return false;
+          }
+
           if (!orderSearch)
             return true;
 
@@ -418,13 +670,22 @@ export default function OrdersPage() {
           return bTime - aTime;
         });
 
-    }, [orders, orderSearch]);
+    }, [orders, orderSearch, isAdmin, partnerSlug]);
 
-  if (loading) {
+  if (resolvingViewer || loading) {
 
     return (
       <div className="min-h-[60vh] flex items-center justify-center text-white text-2xl font-black">
         Loading Orders...
+      </div>
+    );
+  }
+
+  if (!viewerInfo) {
+
+    return (
+      <div className="min-h-[60vh] flex items-center justify-center text-white text-2xl font-black text-center px-6">
+        You must be ZYVAR admin or an approved partner to view this dashboard.
       </div>
     );
   }
@@ -445,7 +706,9 @@ export default function OrdersPage() {
             </p>
 
             <h2 className="text-2xl md:text-3xl font-black">
-              Manage Customer Orders
+              {isAdmin
+                ? "Manage Customer Orders"
+                : "Manage Your Orders"}
             </h2>
 
           </div>
@@ -469,19 +732,44 @@ export default function OrdersPage() {
       {/* ORDERS */}
       {filteredOrders.map((order) => {
 
+        // ITEMS THIS VIEWER IS ALLOWED TO SEE (admin = all, partner = their own only)
+        const visibleItems =
+          getVisibleItems(order);
+
         const currentSubtotal =
 
-          Number(
-            order.productSubtotal
-          ) ||
+          isAdmin
 
-          Number(
-            order.subtotal
-          ) ||
+            ? (Number(
+                order.productSubtotal
+              ) ||
 
-          (Array.isArray(order.items)
+              Number(
+                order.subtotal
+              ) ||
 
-            ? order.items.reduce(
+              (Array.isArray(order.items)
+
+                ? order.items.reduce(
+                    (acc, item) =>
+
+                      acc +
+
+                      Number(
+                        item.price || 0
+                      ) *
+
+                        Number(
+                          item.quantity || 1
+                        ),
+
+                    0
+                  )
+
+                : 0))
+
+            // PARTNER — subtotal is computed only from their own visible items
+            : visibleItems.reduce(
                 (acc, item) =>
 
                   acc +
@@ -495,9 +783,7 @@ export default function OrdersPage() {
                     ),
 
                 0
-              )
-
-            : 0);
+              );
 
         const shippingCharge =
           Number(
@@ -548,16 +834,20 @@ export default function OrdersPage() {
                     {order.address || "No Address"}
                   </p>
 
-                  <button
-                    onClick={() =>
-                      navigate(
-                        `/admin/customer/${order.userId}`
-                      )
-                    }
-                    className="px-5 py-3 rounded-2xl bg-[#C6922B] text-black font-bold hover:opacity-90 transition"
-                  >
-                    View Customer Profile
-                  </button>
+                  {/* VIEW CUSTOMER PROFILE — ADMIN ONLY (unchanged) */}
+                  {isAdmin && (
+
+                    <button
+                      onClick={() =>
+                        navigate(
+                          `/admin/customer/${order.userId}`
+                        )
+                      }
+                      className="px-5 py-3 rounded-2xl bg-[#C6922B] text-black font-bold hover:opacity-90 transition"
+                    >
+                      View Customer Profile
+                    </button>
+                  )}
 
                 </div>
 
@@ -565,13 +855,12 @@ export default function OrdersPage() {
                 <div className="space-y-5">
 
                   <h3 className="text-2xl font-black">
-                    Ordered Products
+                    {isAdmin
+                      ? "Ordered Products"
+                      : "Your Ordered Products"}
                   </h3>
 
-                  {Array.isArray(
-                    order.items
-                  ) &&
-                    order.items.map(
+                  {visibleItems.map(
                       (item, index) => (
 
                         <div
@@ -646,7 +935,10 @@ export default function OrdersPage() {
 
                           </div>
 
-                          {/* EDIT TOTAL */}
+                          {/* EDIT TOTAL — NOW AVAILABLE TO BOTH ADMIN AND PARTNER.
+                              currentSubtotal above is already role-scoped:
+                              admin = whole-order subtotal, partner = subtotal
+                              of only their own visible items. */}
                           <div className="w-full lg:w-[260px]">
 
                             <p className="text-gray-400 mb-3">
@@ -799,7 +1091,7 @@ export default function OrdersPage() {
 
                 </div>
 
-                {/* PAYMENT */}
+                {/* PAYMENT — DETAILS VISIBLE TO BOTH, OVERRIDE BUTTONS ADMIN ONLY (unchanged) */}
                 <div className="rounded-3xl border border-white/10 bg-black/20 p-6 mb-8 space-y-4">
 
                   <h3 className="text-2xl font-black">
@@ -850,128 +1142,133 @@ export default function OrdersPage() {
 
                 </div>
 
-                {/* PAYMENT STATUS BUTTONS — ADMIN CAN ALWAYS OVERRIDE */}
-                <div className="flex flex-wrap gap-3 mb-8">
+                {/* PAYMENT STATUS BUTTONS — ADMIN CAN ALWAYS OVERRIDE (unchanged) */}
+                {isAdmin && (
 
-                  <button
-                    onClick={async () => {
+                  <div className="flex flex-wrap gap-3 mb-8">
 
-                      try {
+                    <button
+                      onClick={async () => {
 
-                        await updateDoc(
-                          doc(
-                            db,
-                            "orders",
-                            order.id
-                          ),
-                          {
-                            paymentStatus:
-                              "Pending",
-                          }
-                        );
+                        try {
 
-                        setOrders(
-                          orders.map(
-                            (o) =>
+                          await updateDoc(
+                            doc(
+                              db,
+                              "orders",
+                              order.id
+                            ),
+                            {
+                              paymentStatus:
+                                "Pending",
+                            }
+                          );
 
-                              o.id === order.id
+                          setOrders(
+                            orders.map(
+                              (o) =>
 
-                                ? {
-                                    ...o,
-                                    paymentStatus:
-                                      "Pending",
-                                  }
+                                o.id === order.id
 
-                                : o
-                          )
-                        );
+                                  ? {
+                                      ...o,
+                                      paymentStatus:
+                                        "Pending",
+                                    }
 
-                      } catch (error) {
+                                  : o
+                            )
+                          );
 
-                        console.log(error);
+                        } catch (error) {
 
-                        await errorAlert(
-                          "Update Failed",
-                          "Failed to update payment status."
-                        );
+                          console.log(error);
+
+                          await errorAlert(
+                            "Update Failed",
+                            "Failed to update payment status."
+                          );
+                        }
+                      }}
+                      className={`px-5 py-3 rounded-2xl border font-bold transition
+
+                      ${
+                        order.paymentStatus ===
+                        "Pending"
+
+                          ? "bg-yellow-500 border-yellow-500 text-black"
+
+                          : "border-yellow-500 text-yellow-400"
                       }
-                    }}
-                    className={`px-5 py-3 rounded-2xl border font-bold transition
+                      `}
+                    >
+                      Pending
+                    </button>
 
-                    ${
-                      order.paymentStatus ===
-                      "Pending"
+                    <button
+                      onClick={async () => {
 
-                        ? "bg-yellow-500 border-yellow-500 text-black"
+                        try {
 
-                        : "border-yellow-500 text-yellow-400"
-                    }
-                    `}
-                  >
-                    Pending
-                  </button>
+                          await updateDoc(
+                            doc(
+                              db,
+                              "orders",
+                              order.id
+                            ),
+                            {
+                              paymentStatus:
+                                "Paid",
+                            }
+                          );
 
-                  <button
-                    onClick={async () => {
+                          setOrders(
+                            orders.map(
+                              (o) =>
 
-                      try {
+                                o.id === order.id
 
-                        await updateDoc(
-                          doc(
-                            db,
-                            "orders",
-                            order.id
-                          ),
-                          {
-                            paymentStatus:
-                              "Paid",
-                          }
-                        );
+                                  ? {
+                                      ...o,
+                                      paymentStatus:
+                                        "Paid",
+                                    }
 
-                        setOrders(
-                          orders.map(
-                            (o) =>
+                                  : o
+                            )
+                          );
 
-                              o.id === order.id
+                        } catch (error) {
 
-                                ? {
-                                    ...o,
-                                    paymentStatus:
-                                      "Paid",
-                                  }
+                          console.log(error);
 
-                                : o
-                          )
-                        );
+                          await errorAlert(
+                            "Update Failed",
+                            "Failed to update payment status."
+                          );
+                        }
+                      }}
+                      className={`px-5 py-3 rounded-2xl border font-bold transition
 
-                      } catch (error) {
+                      ${
+                        order.paymentStatus ===
+                        "Paid"
 
-                        console.log(error);
+                          ? "bg-green-500 border-green-500 text-black"
 
-                        await errorAlert(
-                          "Update Failed",
-                          "Failed to update payment status."
-                        );
+                          : "border-green-500 text-green-400"
                       }
-                    }}
-                    className={`px-5 py-3 rounded-2xl border font-bold transition
+                      `}
+                    >
+                      Paid
+                    </button>
 
-                    ${
-                      order.paymentStatus ===
-                      "Paid"
+                  </div>
+                )}
 
-                        ? "bg-green-500 border-green-500 text-black"
-
-                        : "border-green-500 text-green-400"
-                    }
-                    `}
-                  >
-                    Paid
-                  </button>
-
-                </div>
-
-                {/* SHIPPING CHARGE — ONLY SHOW WHEN SHIPPING STATUS */}
+                {/* SHIPPING CHARGE — NOW AVAILABLE TO BOTH ADMIN AND PARTNER.
+                    Saving triggers the shipping email exactly like admin,
+                    since saveShippingCharge() itself is role-agnostic. */}
                 {
                   order.status === "Shipping" && (
 
@@ -1017,63 +1314,13 @@ export default function OrdersPage() {
                         />
 
                         <button
-                          onClick={async () => {
-
-                            try {
-
-                              await updateDoc(
-                                doc(
-                                  db,
-                                  "orders",
-                                  order.id
-                                ),
-                                {
-
-                                  shipping:
-                                    shippingCharge,
-
-                                  total:
-                                    currentSubtotal +
-                                    shippingCharge,
-                                }
-                              );
-
-                              setOrders(
-                                orders.map(
-                                  (item) =>
-
-                                    item.id ===
-                                    order.id
-
-                                      ? {
-                                          ...item,
-                                          shipping:
-                                            shippingCharge,
-
-                                          total:
-                                            currentSubtotal +
-                                            shippingCharge,
-                                        }
-
-                                      : item
-                                )
-                              );
-
-                              await successAlert(
-                                "Shipping Updated!",
-                                "Shipping charge has been saved successfully."
-                              );
-
-                            } catch (error) {
-
-                              console.log(error);
-
-                              await errorAlert(
-                                "Update Failed",
-                                "Failed to save shipping charge. Please try again."
-                              );
-                            }
-                          }}
+                          onClick={() =>
+                            saveShippingCharge(
+                              order,
+                              shippingCharge,
+                              currentSubtotal
+                            )
+                          }
                           className="px-5 py-3 rounded-2xl bg-[#C6922B] text-black font-bold hover:opacity-90 transition"
                         >
                           Save
@@ -1085,7 +1332,7 @@ export default function OrdersPage() {
                   )
                 }
 
-                {/* STATUS BUTTONS */}
+                {/* STATUS BUTTONS — BOTH ADMIN AND PARTNER CAN MANAGE STATUS/CANCEL (unchanged) */}
                 <div className="flex flex-wrap gap-3">
 
                   {/* PENDING */}
@@ -1207,18 +1454,21 @@ export default function OrdersPage() {
                     Cancel
                   </button>
 
-                  {/* DELETE */}
-                  <button
-                    onClick={() =>
-                      deleteOrderHandler(
-                        order.id
-                      )
-                    }
-                    className="px-5 py-3 rounded-2xl border border-gray-500 text-gray-300 font-bold transition flex items-center gap-3 hover:bg-gray-500 hover:text-black"
-                  >
-                    <FaTrashAlt />
-                    Delete
-                  </button>
+                  {/* DELETE — ADMIN ONLY (unchanged; order may contain other partners' items) */}
+                  {isAdmin && (
+
+                    <button
+                      onClick={() =>
+                        deleteOrderHandler(
+                          order.id
+                        )
+                      }
+                      className="px-5 py-3 rounded-2xl border border-gray-500 text-gray-300 font-bold transition flex items-center gap-3 hover:bg-gray-500 hover:text-black"
+                    >
+                      <FaTrashAlt />
+                      Delete
+                    </button>
+                  )}
 
                 </div>
 
@@ -1240,7 +1490,9 @@ export default function OrdersPage() {
           </h2>
 
           <p className="text-gray-400">
-            Try searching with another Order ID.
+            {isAdmin
+              ? "Try searching with another Order ID."
+              : "You don't have any orders yet, or try searching with another Order ID."}
           </p>
 
         </div>

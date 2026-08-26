@@ -134,32 +134,6 @@ export default function Profile() {
       revenue: 0,
     });
 
-  const [
-    partnerForm,
-    setPartnerForm
-  ] = useState({
-
-    storeName: "",
-
-    storeDescription: "",
-
-    facebook: "",
-
-    instagram: "",
-
-    paymentNumber: "",
-
-    contactEmail: "",
-
-    contactPhone: "",
-
-    storeAddress: "",
-
-    logo: "",
-
-    banner: "",
-  });
-
   // ADMIN CHECK
   const isAdmin =
     ADMIN_EMAILS.includes(
@@ -330,41 +304,6 @@ export default function Profile() {
                 loadPartnerStats(
                   currentUser.uid
                 );
-
-                setPartnerForm({
-
-                  storeName:
-                    partner.shopName || "",
-
-                  storeDescription:
-                    partner.storeDescription || "",
-
-                  facebook:
-                    partner.facebook || "",
-
-                  instagram:
-                    partner.instagram || "",
-
-                  paymentNumber:
-                    partner.paymentNumber || "",
-
-                  contactEmail:
-                    partner.contactEmail ||
-                    currentUser.email ||
-                    "",
-
-                  contactPhone:
-                    partner.contactPhone || "",
-
-                  storeAddress:
-                    partner.storeAddress || "",
-
-                  logo:
-                    partner.logo || "",
-
-                  banner:
-                    partner.banner || "",
-                });
               }
             }
 
@@ -511,19 +450,6 @@ export default function Profile() {
       });
     };
 
-  // PARTNER INPUT CHANGE
-  const handlePartnerChange =
-    (e) => {
-
-      setPartnerForm({
-
-        ...partnerForm,
-
-        [e.target.name]:
-          e.target.value,
-      });
-    };
-
   // PROFILE PICTURE UPLOAD
   const handlePhotoChange =
     async (e) => {
@@ -655,65 +581,6 @@ export default function Profile() {
       }
     };
 
-  // PARTNER LOGO UPLOAD
-  const handlePartnerLogoUpload =
-    async (e) => {
-
-      const file =
-        e.target.files?.[0];
-
-      if (!file) return;
-
-      try {
-
-        const imageUrl =
-          await uploadImage(
-            file
-          );
-
-        setPartnerForm(
-          (prev) => ({
-            ...prev,
-            logo: imageUrl,
-          })
-        );
-
-      } catch (error) {
-
-        console.log(error);
-      }
-    };
-
-  // PARTNER BANNER UPLOAD
-  const handlePartnerBannerUpload =
-    async (e) => {
-
-      const file =
-        e.target.files?.[0];
-
-      if (!file) return;
-
-      try {
-
-        const imageUrl =
-          await uploadImage(
-            file
-          );
-
-        setPartnerForm(
-          (prev) => ({
-            ...prev,
-            banner:
-              imageUrl,
-          })
-        );
-
-      } catch (error) {
-
-        console.log(error);
-      }
-    };
-
   // SAVE PROFILE
   const saveProfile =
     async () => {
@@ -804,142 +671,6 @@ export default function Profile() {
         setSaving(
           false
         );
-      }
-    };
-
-  // SAVE PARTNER PROFILE
-  // FIX: Now updates BOTH users and partnerApplications collections
-  // so partner profile changes are reflected everywhere, and
-  // partnerData state is synced so the UI updates without a reload
-  const savePartnerProfile =
-    async () => {
-
-      try {
-
-        setSaving(true);
-
-        const partnerUpdates = {
-          shopName:
-            partnerForm.storeName,
-          storeDescription:
-            partnerForm.storeDescription,
-          facebook:
-            partnerForm.facebook,
-          instagram:
-            partnerForm.instagram,
-          paymentNumber:
-            partnerForm.paymentNumber,
-          contactEmail:
-            partnerForm.contactEmail,
-          contactPhone:
-            partnerForm.contactPhone,
-          storeAddress:
-            partnerForm.storeAddress,
-          logo:
-            partnerForm.logo,
-          banner:
-            partnerForm.banner,
-        };
-
-        // Update users collection
-        await updateDoc(
-
-          doc(
-            db,
-            "users",
-            user.uid
-          ),
-
-          {
-            storeName:
-              partnerForm.storeName,
-
-            storeDescription:
-              partnerForm.storeDescription,
-
-            facebook:
-              partnerForm.facebook,
-
-            instagram:
-              partnerForm.instagram,
-
-            paymentNumber:
-              partnerForm.paymentNumber,
-
-            contactEmail:
-              partnerForm.contactEmail,
-
-            contactPhone:
-              partnerForm.contactPhone,
-
-            storeAddress:
-              partnerForm.storeAddress,
-
-            logo:
-              partnerForm.logo,
-
-            banner:
-              partnerForm.banner,
-          }
-        );
-
-        // FIX: Also update partnerApplications collection
-        // so that the source of truth stays in sync
-        await updateDoc(
-
-          doc(
-            db,
-            "partnerApplications",
-            user.uid
-          ),
-
-          partnerUpdates
-        );
-
-        // FIX: Sync local partnerData state so derived values
-        // (isPartner, isApprovedPartner) remain accurate
-        // and the UI reflects changes without requiring a reload
-        setPartnerData(
-          (prev) => ({
-            ...prev,
-            ...partnerUpdates,
-          })
-        );
-
-        // Also sync profile state for display fields
-        setProfile(
-          (prev) => ({
-            ...prev,
-            storeName:
-              partnerForm.storeName,
-            facebook:
-              partnerForm.facebook,
-            instagram:
-              partnerForm.instagram,
-            paymentNumber:
-              partnerForm.paymentNumber,
-            description:
-              partnerForm.storeDescription,
-          })
-        );
-
-        successAlert(
-          "Updated",
-          "Partner profile updated successfully."
-        );
-
-      } catch (error) {
-
-        console.log(error);
-
-        errorAlert(
-          "Failed",
-          "Could not update partner profile."
-        );
-
-      } finally {
-
-        setSaving(false);
       }
     };
 
@@ -1309,7 +1040,7 @@ export default function Profile() {
                   )
                 }
 
-                {/* EDIT PARTNER */}
+                {/* EDIT PARTNER PROFILE — navigates to dedicated page */}
 
                 {
                   isApprovedPartner && (
@@ -1327,8 +1058,15 @@ export default function Profile() {
                         border
                         border-[#C6922B]
                         text-[#C6922B]
+                        font-bold
+                        flex
+                        items-center
+                        gap-2
+                        hover:bg-[#C6922B]/10
+                        transition
                       "
                     >
+                      <FaEdit />
                       Edit Partner Profile
                     </button>
 
@@ -2021,6 +1759,38 @@ export default function Profile() {
                     )
                   }
 
+                  {/* SHORTCUT TO EDIT PARTNER PROFILE */}
+                  {
+                    isApprovedPartner && (
+
+                      <button
+                        onClick={() =>
+                          navigate("/partner-settings")
+                        }
+                        className="
+                          mt-6
+                          w-full
+                          py-4
+                          rounded-2xl
+                          border
+                          border-[#C6922B]
+                          text-[#C6922B]
+                          font-bold
+                          flex
+                          items-center
+                          justify-center
+                          gap-2
+                          hover:bg-[#C6922B]/10
+                          transition
+                        "
+                      >
+                        <FaEdit />
+                        Edit Partner Profile
+                      </button>
+
+                    )
+                  }
+
                 </div>
 
               )
@@ -2258,245 +2028,6 @@ export default function Profile() {
                     </span>
 
                   </div>
-
-                </div>
-
-              )
-            }
-
-            {/* PARTNER STORE SETTINGS */}
-
-            {
-              isApprovedPartner && (
-
-                <div className="
-                  rounded-[40px]
-                  border
-                  border-white/10
-                  bg-white/5
-                  backdrop-blur-xl
-                  p-8
-                ">
-
-                  <h2 className="
-                    text-3xl
-                    font-black
-                    mb-8
-                  ">
-                    Partner Store Settings
-                  </h2>
-
-                  <div className="
-                    grid
-                    md:grid-cols-2
-                    gap-6
-                  ">
-
-                    <input
-                      type="text"
-                      name="storeName"
-                      value={
-                        partnerForm.storeName
-                      }
-                      onChange={
-                        handlePartnerChange
-                      }
-                      placeholder="Store Name"
-                      className="
-                        px-5 py-4
-                        rounded-2xl
-                        bg-black/30
-                        border border-white/10
-                        outline-none
-                        focus:border-[#C6922B]
-                      "
-                    />
-
-                    <input
-                      type="text"
-                      name="paymentNumber"
-                      value={
-                        partnerForm.paymentNumber
-                      }
-                      onChange={
-                        handlePartnerChange
-                      }
-                      placeholder="Payment Number"
-                      className="
-                        px-5 py-4
-                        rounded-2xl
-                        bg-black/30
-                        border border-white/10
-                        outline-none
-                        focus:border-[#C6922B]
-                      "
-                    />
-
-                    <input
-                      type="text"
-                      name="facebook"
-                      value={
-                        partnerForm.facebook
-                      }
-                      onChange={
-                        handlePartnerChange
-                      }
-                      placeholder="Facebook URL"
-                      className="
-                        px-5 py-4
-                        rounded-2xl
-                        bg-black/30
-                        border border-white/10
-                        outline-none
-                        focus:border-[#C6922B]
-                      "
-                    />
-
-                    <input
-                      type="text"
-                      name="instagram"
-                      value={
-                        partnerForm.instagram
-                      }
-                      onChange={
-                        handlePartnerChange
-                      }
-                      placeholder="Instagram URL"
-                      className="
-                        px-5 py-4
-                        rounded-2xl
-                        bg-black/30
-                        border border-white/10
-                        outline-none
-                        focus:border-[#C6922B]
-                      "
-                    />
-
-                  </div>
-
-                  <textarea
-                    rows="4"
-                    name="storeDescription"
-                    value={
-                      partnerForm.storeDescription
-                    }
-                    onChange={
-                      handlePartnerChange
-                    }
-                    placeholder="Store Description"
-                    className="
-                      w-full
-                      mt-6
-                      px-5 py-4
-                      rounded-2xl
-                      bg-black/30
-                      border border-white/10
-                      outline-none
-                      focus:border-[#C6922B]
-                    "
-                  />
-
-                  <textarea
-                    rows="3"
-                    name="storeAddress"
-                    value={
-                      partnerForm.storeAddress
-                    }
-                    onChange={
-                      handlePartnerChange
-                    }
-                    placeholder="Store Address"
-                    className="
-                      w-full
-                      mt-6
-                      px-5 py-4
-                      rounded-2xl
-                      bg-black/30
-                      border border-white/10
-                      outline-none
-                      focus:border-[#C6922B]
-                    "
-                  />
-
-                  <div className="
-                    grid
-                    md:grid-cols-2
-                    gap-6
-                    mt-6
-                  ">
-
-                    <div>
-
-                      <label className="block mb-2 text-gray-400">
-                        Store Logo
-                      </label>
-
-                      <input
-                        type="file"
-                        accept="image/*"
-                        onChange={
-                          handlePartnerLogoUpload
-                        }
-                        className="
-                          mt-2
-                          w-full
-                        "
-                      />
-
-                    </div>
-
-                    <div>
-
-                      <label className="block mb-2 text-gray-400">
-                        Store Banner
-                      </label>
-
-                      <input
-                        type="file"
-                        accept="image/*"
-                        onChange={
-                          handlePartnerBannerUpload
-                        }
-                        className="
-                          mt-2
-                          w-full
-                        "
-                      />
-
-                    </div>
-
-                  </div>
-
-                  <button
-
-                    onClick={
-                      savePartnerProfile
-                    }
-
-                    disabled={saving}
-
-                    className="
-                      mt-8
-                      px-8
-                      py-4
-                      rounded-2xl
-                      bg-[#C6922B]
-                      text-black
-                      font-black
-                      hover:scale-105
-                      transition
-                      disabled:opacity-50
-                      disabled:cursor-not-allowed
-                    "
-                  >
-
-                    {
-                      saving
-                        ? "Saving..."
-                        : "Save Store Settings"
-                    }
-
-                  </button>
 
                 </div>
 
